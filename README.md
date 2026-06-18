@@ -1,46 +1,41 @@
-# 🧠 MASC / SePO — Self-Evolving Agent Framework
+# 🧠 SelfEvo — Self-Evolving Agent Connector Framework
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green.svg)](https://fastapi.tiangolo.com)
 
-A **LLM-agnostic** connector framework where:
+A **LLM-agnostic** connector framework that adds automatic validation, correction, and self-evolving prompts to **any** agent pipeline — with zero boilerplate.
 
 | Component | Role |
 |-----------|------|
-| **Agents** | Any domain logic wrapped in a single `generate()` method |
-| **MASC** | Multi-Aspect Schema Check — validates outputs against schemas, detects anomalies, applies corrections |
-| **SePO** | Self-Evolving Prompt Optimizer — learns from repeated anomalies and rewrites agent prompts |
-| **Logger** | Structured JSONL logs with per-agent stats |
-| **API** | FastAPI server — send queries, get validated + evolved responses |
-| **Dashboard** | Streamlit dashboard — live KPIs, corrections, evolution history |
+| **MASC** | Multi-Aspect Schema Check — auto-validates outputs, detects anomalies, corrects them |
+| **SePO** | Self-Evolving Prompt Optimizer — rewrites agent prompts to prevent repeated failures |
+| **Connector** | Routes queries, wires MASC + SePO together, logs every run |
+| **Dashboard** | Streamlit UI — live KPIs, correction history, evolution timeline |
+| **API** | FastAPI server — 9 endpoints for querying, stats, and observability |
 
-> **No LLM vendor lock-in.** Bring OpenAI, Anthropic, Gemini, Ollama, Cohere, Mistral, Azure, or your own provider. MASC validation and SePO heuristics work even with **no LLM at all**.
+> **No vendor lock-in.** Works with OpenAI, Anthropic, Gemini, Ollama, Cohere, Mistral, Azure — or your own provider. MASC corrections work with **no LLM at all**.
 
 ---
 
-## ⚡ Quickstart (no API key needed)
+## ⚡ Quickstart
 
 ```bash
-git clone https://github.com/your-org/masc-sepo
-cd masc-sepo
+git clone https://github.com/SakuDaku05/SelfEvo.git
+cd SelfEvo
 pip install -r requirements.txt
 python examples/quickstart.py
 ```
 
-You'll see:
-- Normal agents running and returning validated outputs
-- A broken agent triggering MASC corrections
-- SePO evolving the broken agent's prompt after 2 consecutive anomalies
-- Aggregate stats
-
 ---
 
-## 🔌 Connect Your Own LLM
-
-Choose your provider (install the relevant SDK first):
+## 🔌 Step 1 — Pick your LLM (one line)
 
 ```python
+# Google Gemini (free tier)
+from evolution.llm_protocol import GeminiAdapter
+llm = GeminiAdapter(api_key="AIza…", model="gemini-2.5-flash")
+
 # OpenAI
 from evolution.llm_protocol import OpenAIAdapter
 llm = OpenAIAdapter(api_key="sk-…", model="gpt-4o")
@@ -49,243 +44,250 @@ llm = OpenAIAdapter(api_key="sk-…", model="gpt-4o")
 from evolution.llm_protocol import AnthropicAdapter
 llm = AnthropicAdapter(api_key="sk-ant-…")
 
-# Google Gemini
-from evolution.llm_protocol import GeminiAdapter
-llm = GeminiAdapter(api_key="AIza…", model="gemini-2.5-flash")
-
-# Ollama (local, free)
+# Ollama (local, free — no key needed)
 from evolution.llm_protocol import OllamaAdapter
-llm = OllamaAdapter(model="llama3")      # needs Ollama running
+llm = OllamaAdapter(model="llama3")
 
-# Cohere
-from evolution.llm_protocol import CohereAdapter
-llm = CohereAdapter(api_key="…")
-
-# Mistral
-from evolution.llm_protocol import MistralAdapter
-llm = MistralAdapter(api_key="…")
-
-# Azure OpenAI
-from evolution.llm_protocol import AzureOpenAIAdapter
-llm = AzureOpenAIAdapter(api_key="…", azure_endpoint="…", api_version="…", deployment_name="…")
-
-# Any custom provider
+# Cohere / Mistral / Azure — same pattern
+# Any custom provider — just expose .chat(messages) -> str
 class MyLLM:
     def chat(self, messages: list[dict]) -> str:
         return my_provider.call(messages)
-
-llm = MyLLM()
 ```
 
-Pass it in:
+---
+
+## 🏗️ Step 2 — Connect your agents (one line each)
+
+### Option A — wrap any function (simplest)
 
 ```python
 from connectors.agent_connector import AgentConnector
+
 connector = AgentConnector(llm_client=llm)
-```
 
----
-
-## 🏗️ Write Your Own Agent
-
-```python
-from connectors.base_agent import BaseAgent
-from typing import Any, Dict
-
-class MyAgent(BaseAgent):
-
-    @property
-    def agent_id(self) -> str:
-        return "my_agent"
-
-    @property
-    def description(self) -> str:
-        return "Does something amazing."
-
-    @property
-    def output_schema(self) -> Dict[str, Any]:
-        # Declare this and MASC auto-validates everything for free
-        return {
-            "type": "object",
-            "required": ["answer", "confidence"],
-            "properties": {
-                "answer":     {"type": "string"},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-            },
-        }
-
-    def generate(self, query: str, **kwargs) -> Any:
-        # Call your LLM, DB, API, rule engine — anything
-        return {"answer": "42", "confidence": 0.95}
-```
-
-Register and run:
-
-```python
-connector = AgentConnector(llm_client=llm)
-connector.register(MyAgent())
-
-result = connector.run("my_agent", "What is the meaning of life?")
-print(result["output"])      # validated (and corrected if needed) output
-print(result["corrected"])   # True if MASC had to fix something
-print(result["anomaly"])     # anomaly dict, or None
-```
-
----
-
-## 🤖 Wrap Any LLM as an Agent (no subclassing)
-
-```python
-from examples.agents import LLMBackedAgent
-from evolution.llm_protocol import OllamaAdapter
-
-llm = OllamaAdapter(model="llama3")
-
-agent = LLMBackedAgent(
-    agent_id="qa_agent",
-    description="Answers questions in JSON",
-    llm_client=llm,
-    system_prompt="You are a helpful assistant. Always reply in JSON with an 'answer' key.",
-    output_schema={
+connector.add_fn(
+    "my_agent",
+    fn=lambda query, **kw: my_existing_function(query),
+    system="You are a helpful assistant. Reply in JSON.",
+    schema={
         "type": "object",
-        "required": ["answer"],
-        "properties": {"answer": {"type": "string"}},
+        "required": ["answer", "confidence"],
+        "properties": {
+            "answer":     {"type": "string"},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        },
     },
 )
+```
 
-connector.register(agent)
-result = connector.run("qa_agent", "What is 2 + 2?")
+### Option B — LLM agent in one call (no class needed)
+
+```python
+connector.add_llm_agent(
+    "summariser",
+    llm_client=llm,
+    system="Summarise the input in 3 sentences. Reply in JSON with key 'summary'.",
+    user_template="Summarise this:\n{query}",
+    schema={
+        "type": "object",
+        "required": ["summary"],
+        "properties": {"summary": {"type": "string"}},
+    },
+)
+```
+
+### Option C — chain multiple agents
+
+```python
+connector \
+    .add_llm_agent("researcher", llm_client=llm, system="...", schema={...}) \
+    .add_llm_agent("analyser",   llm_client=llm, system="...", schema={...}) \
+    .add_llm_agent("writer",     llm_client=llm, system="...")
 ```
 
 ---
 
-## 🛡️ MASC — How Validation Works
+## 🚀 Step 3 — Run (never crashes, MASC handles everything)
 
-MASC automatically derives validation rules from your agent's `output_schema`:
+```python
+result = connector.run("my_agent", "What is the meaning of life?")
 
-| Rule | Checks |
-|------|--------|
-| `null_output` | Output is not None/empty |
-| `type_mismatch` | Top-level type matches schema `type` |
-| `required_fields` | All `required` fields present |
-| `property_types` | Field values match declared types |
-| `numeric_range` | Numbers within `minimum`/`maximum` |
-| `string_pattern` | Strings match declared `pattern` regex |
-| `enum_violation` | Enum fields only use declared values |
-| `empty_array` | Arrays meet `minItems` constraint |
-| `string_not_empty` | Plain-text output is not blank |
+print(result["output"])     # validated (and corrected if needed) output
+print(result["corrected"])  # True if MASC had to fix something
+print(result["anomaly"])    # anomaly type, or None
+print(result["latency_ms"]) # round-trip time
+```
 
-**No schema?** MASC still validates: output is non-null and (if string) non-empty.
+---
 
-**Add a custom rule:**
+## 🛡️ MASC — What gets validated automatically
+
+Declare an `output_schema` (JSON Schema) and MASC auto-derives all these rules:
+
+| Rule | What it catches |
+|------|----------------|
+| `null_output` | None / empty response |
+| `type_mismatch` | Wrong top-level type (string instead of object, etc.) |
+| `required_fields` | Missing required keys |
+| `property_types` | Field values of wrong type |
+| `numeric_range` | Numbers outside `minimum`/`maximum` |
+| `string_pattern` | Strings not matching `pattern` regex |
+| `enum_violation` | Enum fields with undeclared values |
+| `empty_array` | Arrays not meeting `minItems` |
+| `string_not_empty` | Blank plain-text output |
+
+**No schema?** MASC still validates: output is non-null and non-empty.
+
+### Add a custom rule (plug-in system)
 
 ```python
 from interceptor.masc_validator import MASCValidator, ValidationRule
 
-class ProfanityFilter(ValidationRule):
-    name = "profanity_filter"
-    description = "Blocks outputs containing banned terms."
+class ToxicityFilter(ValidationRule):
+    name = "toxicity_filter"
 
     def check(self, output, schema):
         if isinstance(output, str) and "badword" in output.lower():
-            return {"type": "profanity_filter", "detail": "Banned term found",
+            return {"type": "toxicity_filter", "detail": "Banned term",
                     "field": None, "value": output}
 
-validator = MASCValidator()
-validator.add_rule(ProfanityFilter())
+connector.validator.add_rule(ToxicityFilter())
 ```
 
 ---
 
-## 🧬 SePO — How Prompt Evolution Works
+## 🧬 SePO — Self-Healing Prompts
 
-After `anomaly_threshold` consecutive anomalies on the same agent:
+After `anomaly_threshold` consecutive bad outputs on the same agent:
 
-1. **With LLM**: SePO sends the current system prompt + anomaly details to your LLM and asks it to rewrite the prompt to prevent recurrence.
-2. **Without LLM**: SePO appends a targeted instruction patch (e.g. "CRITICAL: Always return a non-empty response.").
-3. The new prompt is saved to `logs/evolution_history.jsonl` and applied to the agent via `on_evolution()`.
+1. **With LLM** → SePO sends the current prompt + anomaly details to your LLM and gets back a rewritten prompt.
+2. **Without LLM** → SePO appends a targeted instruction patch (e.g. *"CRITICAL: Always return a non-empty JSON object."*).
+3. The new prompt is saved to `logs/evolution_history.jsonl` and applied automatically.
 
----
-
-## 🌐 API Server
-
-```bash
-python examples/server_demo.py
-# → http://localhost:8000/docs  (Swagger UI)
+```python
+# Set how many anomalies trigger an evolution cycle (default: 3)
+connector = AgentConnector(llm_client=llm, anomaly_threshold=2)
 ```
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/query` | Run a query through an agent |
-| GET | `/agents` | List registered agents |
-| GET | `/stats` | Global + per-agent stats |
-| GET | `/stats/{agent_id}` | Single agent stats |
-| GET | `/logs?n=50` | Recent run logs |
-| GET | `/evolution` | SePO evolution history |
-| GET | `/evolution/{agent_id}` | Agent-specific evolution |
-| GET | `/rules` | Active MASC rule names |
-| GET | `/health` | Liveness probe |
-
 ---
 
-## 📊 Dashboard
+## 📊 Observability
+
+### Stats
+
+```python
+stats = connector.stats()
+print(stats["global"]["correction_rate"])       # e.g. 0.23
+print(stats["agents"]["my_agent"]["total_runs"])
+```
+
+### Dashboard
 
 ```bash
 streamlit run dashboard/app.py
 ```
 
-Pages: Overview KPIs · Agent Drill-Down · Evolution History · Live Logs · MASC Rules
+5 pages: **Overview KPIs · Agent Drill-Down · Evolution History · Live Logs · MASC Rules**
+
+### API Server
+
+```bash
+uvicorn api.server:app --reload
+# → http://localhost:8000/docs
+```
+
+---
+
+## 🔬 Advanced — subclass BaseAgent for full control
+
+For agents that need custom lifecycle hooks (`on_correction`, `on_evolution`), use the full class API:
+
+```python
+from connectors.base_agent import BaseAgent
+
+class MyAgent(BaseAgent):
+    @property
+    def agent_id(self) -> str: return "my_agent"
+    @property
+    def output_schema(self): return {"type": "object", ...}
+
+    def generate(self, query: str, **kwargs):
+        return my_logic(query)
+
+    def on_evolution(self, new_prompt: str):
+        # Called whenever SePO rewrites the prompt
+        self.save_prompt_to_db(new_prompt)
+
+connector.register(MyAgent())
+```
+
+> The `add_fn` / `add_llm_agent` one-liners use this internally — subclassing is only needed for advanced hooks.
 
 ---
 
 ## 📁 Project Structure
 
 ```
-masc-sepo/
+SelfEvo/
 ├── connectors/
-│   ├── base_agent.py          # Abstract agent interface
-│   └── agent_connector.py     # Central orchestrator
+│   ├── base_agent.py          # Abstract agent interface (advanced use)
+│   ├── quick_agent.py         # FunctionAgent — wraps any callable
+│   └── agent_connector.py     # Orchestrator: add_fn, add_llm_agent, run
 ├── interceptor/
-│   ├── masc_validator.py      # Schema-driven validation rules
-│   └── correction_agent.py    # Heuristic + LLM corrections
+│   ├── masc_validator.py      # 9 schema-driven validation rules + plugin API
+│   └── correction_agent.py    # Heuristic + LLM-assisted correction
 ├── evolution/
-│   ├── llm_protocol.py        # LLM adapters (7 providers)
+│   ├── llm_protocol.py        # 7 LLM provider adapters + protocol
 │   ├── sepo_engine.py         # Prompt evolution engine
-│   └── evolution_tracker.py   # History analytics
+│   └── evolution_tracker.py   # JSONL history analytics
 ├── logs/
-│   └── logger.py              # Structured JSONL logger + stats
+│   └── logger.py              # Thread-safe JSONL logger + aggregate stats
 ├── api/
-│   └── server.py              # FastAPI application
+│   └── server.py              # FastAPI (9 endpoints)
 ├── dashboard/
-│   └── app.py                 # Streamlit dashboard
-└── examples/
-    ├── agents.py              # Finance, Health, Legal, Sentiment, …
-    ├── quickstart.py          # No-API-key demo
-    └── server_demo.py         # Pre-loaded API server
+│   └── app.py                 # Streamlit dashboard (5 pages)
+├── examples/
+│   ├── quickstart.py          # Full demo, no API key needed
+│   ├── multi_agent_simple.py  # 4-agent pipeline using the simple API
+│   └── agents.py              # Finance, Health, Legal, Sentiment, Echo agents
+└── tests/
+    ├── test_masc_validator.py  # 38 MASC rule tests (offline)
+    ├── test_correction_agent.py# 22 correction tests (offline)
+    ├── test_agent_connector.py # 17 connector + SePO tests (offline)
+    └── test_quick_api.py       # 8 add_fn / add_llm_agent tests (offline)
 ```
 
 ---
 
-## 📦 Installation
+## 📦 Install
 
 ```bash
-# Core only
-pip install masc-sepo
+pip install -r requirements.txt
 
-# With dashboard
-pip install "masc-sepo[dashboard]"
+# Optional LLM SDKs
+pip install google-genai          # Gemini
+pip install openai                # OpenAI / Azure
+pip install anthropic             # Anthropic
+pip install ollama                # Ollama (local)
+pip install cohere                # Cohere
+pip install mistralai             # Mistral
+```
 
-# With a specific LLM
-pip install "masc-sepo[ollama]"
-pip install "masc-sepo[openai]"
-pip install "masc-sepo[anthropic]"
+---
 
-# Everything
-pip install "masc-sepo[all]"
+## 🧪 Tests
+
+```bash
+# All offline tests (no API key needed)
+pytest tests/ -v
+
+# With live Gemini tests
+GEMINI_API_KEY=AIza… pytest tests/ -v
 ```
 
 ---
 
 ## License
 
-MIT © 2024 — PRs welcome!
+MIT © 2025 — PRs welcome! ⭐ Star the repo if this saves you from a JSONDecodeError at 2am.
