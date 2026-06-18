@@ -1,0 +1,55 @@
+# ── Python ───────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ─────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Secrets / credentials (NEVER commit these) ───────────────────────────
+.env
+.env.*
+*.pem
+*.key
+secrets.json
+
+# ── Logs & generated data ────────────────────────────────────────────────
+logs/*.json
+logs/*.jsonl
+logs/evolution_history.jsonl
+
+# ── pytest / coverage ────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+
+# ── IDEs ─────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Streamlit ────────────────────────────────────────────────────────────
+.streamlit/
+
+# ── Jupyter ──────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Distribution / packaging ─────────────────────────────────────────────
+*.tar.gz
+*.whl
+MANIFEST

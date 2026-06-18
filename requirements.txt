@@ -1,0 +1,13 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.0
+streamlit>=1.32.0
+pandas>=2.0
+
+# Uncomment the LLM SDK(s) you want to use:
+# openai>=1.0
+# anthropic>=0.20
+# google-genai>=0.3
+# ollama>=0.1
+# cohere>=5.0
+# mistralai>=1.0
