@@ -1,3 +1,9 @@
+# ── Demo / verbose examples (not needed for framework users) ─────────────
+examples/multi_agent_raw.py
+examples/multi_agent_with_masc.py
+examples/server_demo.py
+tests/test_gemini_live.py
+
 # ── Python ───────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
