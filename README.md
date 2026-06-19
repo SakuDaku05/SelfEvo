@@ -1,5 +1,9 @@
 # 🧠 SelfEvo — Self-Evolving Agent Connector Framework
 
+<p align="center">
+  <img src="assets/banner.png" alt="SelfEvo — Self-Evolving AI Agents" width="100%"/>
+</p>
+
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green.svg)](https://fastapi.tiangolo.com)
