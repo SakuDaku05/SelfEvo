@@ -3,18 +3,20 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green.svg)](https://fastapi.tiangolo.com)
+[![Tests](https://img.shields.io/badge/tests-112%20passing-brightgreen.svg)](#tests)
 
-A **LLM-agnostic** connector framework that adds automatic validation, correction, and self-evolving prompts to **any** agent pipeline — with zero boilerplate.
+A **LLM-agnostic** connector framework that wraps any agent pipeline with automatic validation, self-correction, streaming, async support, conversation memory, and self-evolving prompts — with zero boilerplate.
 
 | Component | Role |
 |-----------|------|
 | **MASC** | Multi-Aspect Schema Check — auto-validates outputs, detects anomalies, corrects them |
 | **SePO** | Self-Evolving Prompt Optimizer — rewrites agent prompts to prevent repeated failures |
 | **Connector** | Routes queries, wires MASC + SePO together, logs every run |
+| **Memory** | Claude-style `.md` file — per-agent conversation history, auto-injected as context |
 | **Dashboard** | Streamlit UI — live KPIs, correction history, evolution timeline |
 | **API** | FastAPI server — 9 endpoints for querying, stats, and observability |
 
-> **No vendor lock-in.** Works with OpenAI, Anthropic, Gemini, Ollama, Cohere, Mistral, Azure — or your own provider. MASC corrections work with **no LLM at all**.
+> **No vendor lock-in.** Works with OpenAI, Anthropic, Gemini, Ollama, Cohere, Mistral, Azure — or any object with a `.chat(messages) -> str` method. MASC corrections work with **no LLM at all**.
 
 ---
 
@@ -48,7 +50,6 @@ llm = AnthropicAdapter(api_key="sk-ant-…")
 from evolution.llm_protocol import OllamaAdapter
 llm = OllamaAdapter(model="llama3")
 
-# Cohere / Mistral / Azure — same pattern
 # Any custom provider — just expose .chat(messages) -> str
 class MyLLM:
     def chat(self, messages: list[dict]) -> str:
@@ -59,7 +60,7 @@ class MyLLM:
 
 ## 🏗️ Step 2 — Connect your agents (one line each)
 
-### Option A — wrap any function (simplest)
+### Option A — wrap any function
 
 ```python
 from connectors.agent_connector import AgentConnector
@@ -67,27 +68,26 @@ from connectors.agent_connector import AgentConnector
 connector = AgentConnector(llm_client=llm)
 
 connector.add_fn(
-    "my_agent",
-    fn=lambda query, **kw: my_existing_function(query),
-    system="You are a helpful assistant. Reply in JSON.",
+    "sentiment",
+    fn=lambda query, **kw: my_sentiment_model(query),
     schema={
         "type": "object",
-        "required": ["answer", "confidence"],
+        "required": ["label", "score"],
         "properties": {
-            "answer":     {"type": "string"},
-            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "label": {"type": "string", "enum": ["positive", "negative", "neutral"]},
+            "score": {"type": "number", "minimum": 0, "maximum": 1},
         },
     },
 )
 ```
 
-### Option B — LLM agent in one call (no class needed)
+### Option B — LLM agent in one call
 
 ```python
 connector.add_llm_agent(
     "summariser",
     llm_client=llm,
-    system="Summarise the input in 3 sentences. Reply in JSON with key 'summary'.",
+    system="Summarise the input in 3 sentences. Reply ONLY with JSON key 'summary'.",
     user_template="Summarise this:\n{query}",
     schema={
         "type": "object",
@@ -108,15 +108,115 @@ connector \
 
 ---
 
-## 🚀 Step 3 — Run (never crashes, MASC handles everything)
+## 🚀 Step 3 — Run
+
+### Sync (classic)
 
 ```python
-result = connector.run("my_agent", "What is the meaning of life?")
+result = connector.run("summariser", "Explain quantum entanglement.")
 
-print(result["output"])     # validated (and corrected if needed) output
-print(result["corrected"])  # True if MASC had to fix something
-print(result["anomaly"])    # anomaly type, or None
-print(result["latency_ms"]) # round-trip time
+print(result["output"])      # validated (and corrected if needed) output
+print(result["corrected"])   # True if MASC had to fix something
+print(result["anomaly"])     # anomaly type dict, or None
+print(result["latency_ms"])  # round-trip time
+```
+
+### Async
+
+```python
+# Single async call — works inside FastAPI, asyncio pipelines, etc.
+result = await connector.arun("summariser", "query")
+
+# Parallel fan-out across multiple agents simultaneously
+import asyncio
+results = await asyncio.gather(
+    connector.arun("researcher",  query),
+    connector.arun("fact_checker", query),
+    connector.arun("analyst",     query),
+)
+```
+
+Both sync and async agents are supported. Pass an `async def` function to `add_fn()` and it is awaited natively.
+
+### Streaming
+
+```python
+# Sync streaming — yields tokens as they arrive
+for msg in connector.stream("writer", query):
+    if msg["event"] == "chunk":
+        print(msg["text"], end="", flush=True)   # live tokens
+    elif msg["event"] == "done":
+        print()
+        if msg["corrected"]:
+            print("[MASC fixed:", msg["anomaly"]["type"], "]")
+
+# Async streaming — for FastAPI SSE / WebSocket handlers
+async for msg in connector.astream("writer", query):
+    if msg["event"] == "chunk":
+        await websocket.send_text(msg["text"])
+    elif msg["event"] == "done":
+        await websocket.send_json({"masc": msg["anomaly"]})
+```
+
+MASC validation runs on the fully assembled output after all chunks arrive.
+
+---
+
+## 🗂️ Conversation Memory (Claude-style `.md` file)
+
+Enable persistent per-agent memory in one line:
+
+```python
+connector.use_memory("memory.md", inject_turns=5)
+```
+
+That's it. Every subsequent `run()` / `arun()` / `stream()` call will:
+1. **Inject** the agent's last N conversation turns as context into the prompt
+2. **Record** the query and output as a new turn
+3. **Log** MASC anomalies and SePO evolution events as notes
+
+The `memory.md` file is human-readable and editable — just like Claude's memory:
+
+```markdown
+# SelfEvo Agent Memory
+
+## Agent: summariser
+*Last updated: 2025-06-19 10:30:00*
+
+### Conversation
+| Turn | Role | Content |
+|------|------|---------|
+| 2025-06-19 10:28 | user  | Explain quantum entanglement. |
+| 2025-06-19 10:28 | agent | {"summary": "Quantum entanglement is..."} |
+| 2025-06-19 10:29 | user  | Give a simpler explanation. |
+| 2025-06-19 10:29 | agent | {"summary": "Two particles linked..."} |
+
+### MASC Notes
+- `2025-06-19 10:28` — anomaly `null_output` detected — **corrected automatically**.
+
+### SePO Events
+- `2025-06-19 10:30` — prompt evolved (`heuristic`) due to repeated `null_output` anomalies.
+```
+
+**Advanced memory usage:**
+
+```python
+from connectors.memory import MarkdownMemory
+
+# Share one memory file across multiple connectors
+memory = MarkdownMemory("shared_memory.md", max_turns=100, inject_turns=10)
+connector_a.use_memory(memory)
+connector_b.use_memory(memory)
+
+# Inspect memory programmatically
+print(memory.summary())
+# {'summariser': {'turns': 4, 'masc_notes': 1, 'sepo_events': 1}}
+
+# Get context as a message list (OpenAI format)
+messages = memory.get_messages("summariser")
+
+# Wipe a specific agent's memory
+memory.clear_agent("summariser")
 ```
 
 ---
@@ -139,10 +239,10 @@ Declare an `output_schema` (JSON Schema) and MASC auto-derives all these rules:
 
 **No schema?** MASC still validates: output is non-null and non-empty.
 
-### Add a custom rule (plug-in system)
+### Add a custom rule
 
 ```python
-from interceptor.masc_validator import MASCValidator, ValidationRule
+from interceptor.masc_validator import ValidationRule
 
 class ToxicityFilter(ValidationRule):
     name = "toxicity_filter"
@@ -161,12 +261,12 @@ connector.validator.add_rule(ToxicityFilter())
 
 After `anomaly_threshold` consecutive bad outputs on the same agent:
 
-1. **With LLM** → SePO sends the current prompt + anomaly details to your LLM and gets back a rewritten prompt.
-2. **Without LLM** → SePO appends a targeted instruction patch (e.g. *"CRITICAL: Always return a non-empty JSON object."*).
-3. The new prompt is saved to `logs/evolution_history.jsonl` and applied automatically.
+1. **With LLM** → SePO asks your LLM to rewrite the current prompt to prevent the anomaly.
+2. **Without LLM** → SePO appends a targeted patch (e.g. *"CRITICAL: Always return a non-empty JSON object."*).
+3. The new prompt is applied automatically and saved to `logs/evolution_history.jsonl` and `memory.md`.
 
 ```python
-# Set how many anomalies trigger an evolution cycle (default: 3)
+# Trigger evolution after 2 consecutive anomalies (default: 3)
 connector = AgentConnector(llm_client=llm, anomaly_threshold=2)
 ```
 
@@ -179,7 +279,7 @@ connector = AgentConnector(llm_client=llm, anomaly_threshold=2)
 ```python
 stats = connector.stats()
 print(stats["global"]["correction_rate"])       # e.g. 0.23
-print(stats["agents"]["my_agent"]["total_runs"])
+print(stats["agents"]["summariser"]["total_runs"])
 ```
 
 ### Dashboard
@@ -194,35 +294,44 @@ streamlit run dashboard/app.py
 
 ```bash
 uvicorn api.server:app --reload
-# → http://localhost:8000/docs
+# Swagger UI → http://localhost:8000/docs
 ```
 
 ---
 
-## 🔬 Advanced — subclass BaseAgent for full control
+## 🔬 Advanced — full class API with lifecycle hooks
 
-For agents that need custom lifecycle hooks (`on_correction`, `on_evolution`), use the full class API:
+For agents that need custom `on_correction` / `on_evolution` callbacks:
 
 ```python
 from connectors.base_agent import BaseAgent
 
 class MyAgent(BaseAgent):
     @property
-    def agent_id(self) -> str: return "my_agent"
+    def agent_id(self): return "my_agent"
+
     @property
-    def output_schema(self): return {"type": "object", ...}
+    def output_schema(self):
+        return {"type": "object", "required": ["answer"], ...}
 
     def generate(self, query: str, **kwargs):
         return my_logic(query)
 
+    # Native async — skips thread executor entirely
+    async def agenerate(self, query: str, **kwargs):
+        return await my_async_logic(query)
+
+    # Real token streaming
+    def stream_generate(self, query: str, **kwargs):
+        for chunk in self._llm.stream(query):
+            yield chunk
+
+    # Called whenever SePO rewrites the prompt
     def on_evolution(self, new_prompt: str):
-        # Called whenever SePO rewrites the prompt
         self.save_prompt_to_db(new_prompt)
 
 connector.register(MyAgent())
 ```
-
-> The `add_fn` / `add_llm_agent` one-liners use this internally — subclassing is only needed for advanced hooks.
 
 ---
 
@@ -231,9 +340,10 @@ connector.register(MyAgent())
 ```
 SelfEvo/
 ├── connectors/
-│   ├── base_agent.py          # Abstract agent interface (advanced use)
-│   ├── quick_agent.py         # FunctionAgent — wraps any callable
-│   └── agent_connector.py     # Orchestrator: add_fn, add_llm_agent, run
+│   ├── base_agent.py          # Abstract interface (agenerate, stream_generate hooks)
+│   ├── quick_agent.py         # FunctionAgent — wraps any callable, sync or async
+│   ├── agent_connector.py     # Orchestrator: run, arun, stream, astream, use_memory
+│   └── memory.py              # MarkdownMemory — Claude-style .md conversation store
 ├── interceptor/
 │   ├── masc_validator.py      # 9 schema-driven validation rules + plugin API
 │   └── correction_agent.py    # Heuristic + LLM-assisted correction
@@ -247,15 +357,33 @@ SelfEvo/
 │   └── server.py              # FastAPI (9 endpoints)
 ├── dashboard/
 │   └── app.py                 # Streamlit dashboard (5 pages)
-├── examples/
-│   ├── quickstart.py          # Full demo, no API key needed
-│   ├── multi_agent_simple.py  # 4-agent pipeline using the simple API
-│   └── agents.py              # Finance, Health, Legal, Sentiment, Echo agents
-└── tests/
-    ├── test_masc_validator.py  # 38 MASC rule tests (offline)
-    ├── test_correction_agent.py# 22 correction tests (offline)
-    ├── test_agent_connector.py # 17 connector + SePO tests (offline)
-    └── test_quick_api.py       # 8 add_fn / add_llm_agent tests (offline)
+└── examples/
+    ├── quickstart.py           # Full demo, no API key needed
+    ├── multi_agent_simple.py   # 4-agent pipeline using the one-liner API
+    └── agents.py               # Finance, Health, Legal, Sentiment, Echo agents
+```
+
+---
+
+## 🧪 Tests
+
+```
+tests/
+├── test_masc_validator.py        38 tests  (offline)
+├── test_correction_agent.py      22 tests  (offline)
+├── test_agent_connector.py       17 tests  (offline)
+├── test_quick_api.py              8 tests  (offline)
+└── test_async_stream_memory.py   14 tests  (offline — async, stream, memory)
+                               ─────────────
+                               99 tests total, all offline, no API key needed
+```
+
+```bash
+# Run all offline tests (instant, no API key)
+pytest tests/ -v
+
+# Run with live Gemini tests (requires GEMINI_API_KEY in .env)
+# Note: add tests/test_gemini_live.py back and run separately
 ```
 
 ---
@@ -265,29 +393,17 @@ SelfEvo/
 ```bash
 pip install -r requirements.txt
 
-# Optional LLM SDKs
-pip install google-genai          # Gemini
-pip install openai                # OpenAI / Azure
-pip install anthropic             # Anthropic
-pip install ollama                # Ollama (local)
-pip install cohere                # Cohere
-pip install mistralai             # Mistral
-```
-
----
-
-## 🧪 Tests
-
-```bash
-# All offline tests (no API key needed)
-pytest tests/ -v
-
-# With live Gemini tests
-GEMINI_API_KEY=AIza… pytest tests/ -v
+# Optional LLM SDKs (install whichever you use)
+pip install google-genai      # Gemini
+pip install openai            # OpenAI / Azure
+pip install anthropic         # Anthropic
+pip install ollama            # Ollama (local)
+pip install cohere            # Cohere
+pip install mistralai         # Mistral
 ```
 
 ---
 
 ## License
 
-MIT © 2025 — PRs welcome! ⭐ Star the repo if this saves you from a JSONDecodeError at 2am.
+MIT © 2025 — PRs welcome! ⭐ Star the repo if this saves you from a `JSONDecodeError` at 2am.
