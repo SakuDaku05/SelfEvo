@@ -11,7 +11,8 @@ To add a new agent:
 from __future__ import annotations
 
 import abc
-from typing import Any, Dict, List, Optional
+import asyncio
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional
 
 
 class BaseAgent(abc.ABC):
@@ -80,6 +81,46 @@ class BaseAgent(abc.ABC):
         The return value can be anything (str, dict, list …).  MASC will
         validate it against :attr:`output_schema` and any registered rules.
         """
+
+    async def agenerate(self, query: str, **kwargs: Any) -> Any:
+        """
+        Async version of generate().  Default implementation runs the
+        sync ``generate()`` in a thread pool so it never blocks the
+        event loop.  Override with a native ``async def`` implementation
+        for true async agents (aiohttp, async DB, async LLM SDKs, etc.).
+
+        Example override::
+
+            async def agenerate(self, query, **kwargs):
+                async with aiohttp.ClientSession() as s:
+                    r = await s.post(url, json={"q": query})
+                    return await r.json()
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.generate, query)
+
+    def stream_generate(self, query: str, **kwargs: Any) -> Iterator[str]:
+        """
+        Streaming version of generate().  Yields text chunks one at a time.
+
+        Default: calls ``generate()`` and yields the whole result as one
+        chunk.  Override to yield real token-by-token chunks::
+
+            def stream_generate(self, query, **kwargs):
+                for chunk in self._llm.stream(query):
+                    yield chunk
+        """
+        result = self.generate(query, **kwargs)
+        yield str(result) if not isinstance(result, str) else result
+
+    async def astream_generate(self, query: str, **kwargs: Any) -> AsyncIterator[str]:
+        """
+        Async streaming version. Default runs stream_generate() in a
+        thread and converts it to an async generator.
+        Override for native async streaming.
+        """
+        for chunk in self.stream_generate(query, **kwargs):
+            yield chunk
 
     # ------------------------------------------------------------------ #
     # Optional lifecycle hooks                                            #

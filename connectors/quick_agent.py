@@ -7,9 +7,10 @@ No subclassing required.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
-from typing import Any, Callable, Dict, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, Optional
 
 from connectors.base_agent import BaseAgent
 
@@ -71,10 +72,23 @@ class FunctionAgent(BaseAgent):
     # ── Core ────────────────────────────────────────────────────────── #
     def generate(self, query: str, **kwargs: Any) -> Any:
         result = self._fn(query, **kwargs)
-
         if self._parse_json and isinstance(result, str):
             result = self._try_parse(result)
+        return result
 
+    async def agenerate(self, query: str, **kwargs: Any) -> Any:
+        """
+        If the wrapped function is a coroutine (async def), await it
+        directly.  Otherwise fall back to the thread-executor path so
+        sync functions never block the event loop.
+        """
+        if asyncio.iscoroutinefunction(self._fn):
+            result = await self._fn(query, **kwargs)
+        else:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, self._fn, query)
+        if self._parse_json and isinstance(result, str):
+            result = self._try_parse(result)
         return result
 
     # ── Helper ──────────────────────────────────────────────────────── #
